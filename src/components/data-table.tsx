@@ -43,11 +43,18 @@ import { cn } from "@/lib/utils"
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
+  onCellUpdate?: (rowData: Record<string, unknown>, columnKey: string, newValue: string | null) => void
+}
+
+interface EditingCell {
+  rowId: string
+  colKey: string
 }
 
 export function DataTable<TData, TValue>({
   columns,
   data,
+  onCellUpdate,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
@@ -56,6 +63,16 @@ export function DataTable<TData, TValue>({
     pageIndex: 0,
     pageSize: 20,
   })
+  const [editingCell, setEditingCell] = React.useState<EditingCell | null>(null)
+  const [editValue, setEditValue] = React.useState("")
+  const editInputRef = React.useRef<HTMLInputElement>(null)
+
+  const commitEdit = (rowData: Record<string, unknown>, colKey: string) => {
+    onCellUpdate?.(rowData, colKey, editValue === "" ? null : editValue)
+    setEditingCell(null)
+  }
+
+  const cancelEdit = () => setEditingCell(null)
 
   const table = useReactTable({
     data,
@@ -150,11 +167,49 @@ export function DataTable<TData, TValue>({
                   <TableCell className="text-center text-xs text-muted-foreground font-mono border-r w-12 group-hover:bg-muted/30">
                     {pageIndex * pageSize + i + 1}
                   </TableCell>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="font-mono text-sm max-w-xs">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                  ))}
+                  {row.getVisibleCells().map((cell) => {
+                    const isEditing = editingCell?.rowId === row.id && editingCell?.colKey === cell.column.id
+                    const rawValue = cell.getValue()
+                    const isBlob = rawValue instanceof Uint8Array
+                    const isEditable = onCellUpdate && !isBlob
+
+                    return (
+                      <TableCell
+                        key={cell.id}
+                        className={cn(
+                          "font-mono text-sm max-w-xs",
+                          isEditable && "group/cell relative",
+                        )}
+                        onDoubleClick={() => {
+                          if (!isEditable) return
+                          setEditingCell({ rowId: row.id, colKey: cell.column.id })
+                          setEditValue(rawValue === null || rawValue === undefined ? "" : String(rawValue))
+                        }}
+                      >
+                        {isEditing ? (
+                          <input
+                            ref={editInputRef}
+                            autoFocus
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault()
+                                commitEdit(row.original as Record<string, unknown>, cell.column.id)
+                              }
+                              if (e.key === "Escape") cancelEdit()
+                            }}
+                            onBlur={() => commitEdit(row.original as Record<string, unknown>, cell.column.id)}
+                            className="w-full min-w-12 bg-transparent border-0 border-b-2 border-primary outline-none text-sm font-mono py-0 px-0"
+                          />
+                        ) : (
+                          <span className={cn("block truncate", isEditable && "w-full")}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </span>
+                        )}
+                      </TableCell>
+                    )
+                  })}
                 </TableRow>
               ))
             ) : (

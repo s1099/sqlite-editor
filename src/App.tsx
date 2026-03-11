@@ -7,6 +7,16 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog"
+import {
   Database as DatabaseIcon,
   Loader2,
   AlertCircle,
@@ -14,6 +24,7 @@ import {
   Search,
   X,
   UploadCloud,
+  Download,
 } from 'lucide-react'
 
 interface TableMeta {
@@ -54,6 +65,8 @@ function App() {
   const [isSqlLoading, setIsSqlLoading] = useState(true)
   const [isDragging, setIsDragging] = useState(false)
   const [tableSearch, setTableSearch] = useState("")
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -140,11 +153,36 @@ function App() {
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
+  const handleCellUpdate = (rowData: Record<string, unknown>, columnKey: string, newValue: string | null) => {
+    if (!db || !activeTable) return
+    try {
+      const rowid = rowData["_sv_rowid_"] as number
+      db.run(
+        `UPDATE "${activeTable}" SET "${columnKey}" = ? WHERE rowid = ?`,
+        [newValue, rowid]
+      )
+      setRefreshTrigger((t) => t + 1)
+    } catch (err) {
+      setError(`Update failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const handleDownload = () => {
+    if (!db) return
+    const exported = db.export()
+    const blob = new Blob([new Uint8Array(exported)], { type: "application/x-sqlite3" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = fileName
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   useEffect(() => {
     if (!db || !activeTable) return
 
     try {
-      // Get column metadata
       const colResult = db.exec(`PRAGMA table_info("${activeTable}")`)
       const infos: ColumnInfo[] = colResult.length > 0
         ? colResult[0].values.map((row) => ({
@@ -156,12 +194,14 @@ function App() {
         : []
       setColumnInfos(infos)
 
-      const result = db.exec(`SELECT * FROM "${activeTable}"`)
+      // Include rowid so we can UPDATE rows by a stable identifier
+      const result = db.exec(`SELECT rowid as _sv_rowid_, * FROM "${activeTable}"`)
 
       if (result.length > 0) {
         const { columns: dbColumns, values } = result[0]
+        const displayCols = dbColumns.filter((col) => col !== "_sv_rowid_")
 
-        const tableColumns: ColumnDef<Record<string, unknown>>[] = dbColumns.map((col) => ({
+        const tableColumns: ColumnDef<Record<string, unknown>>[] = displayCols.map((col) => ({
           accessorKey: col,
           header: col,
           cell: (info) => <CellValue value={info.getValue()} />,
@@ -189,7 +229,7 @@ function App() {
     } catch {
       setError(`Failed to query table "${activeTable}".`)
     }
-  }, [db, activeTable])
+  }, [db, activeTable, refreshTrigger])
 
   const filteredTables = tables.filter((t) =>
     t.name.toLowerCase().includes(tableSearch.toLowerCase())
@@ -292,15 +332,46 @@ function App() {
             {tables.length} {tables.length === 1 ? "table" : "tables"}
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleClose}
-          className="shrink-0 gap-1.5 text-muted-foreground hover:text-foreground"
-        >
-          <X className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline text-xs">Close</span>
-        </Button>
+        <div className="flex items-center gap-1">
+          <AlertDialog open={showCloseConfirm} onOpenChange={setShowCloseConfirm}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Close database?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Any unsaved changes will be lost. Download the database first if you want to keep your edits.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => { setShowCloseConfirm(false); handleClose() }}
+                >
+                  Close
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowCloseConfirm(true)}
+            className="shrink-0 gap-1.5 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline text-xs">Close</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDownload}
+            className="shrink-0 gap-1.5 text-muted-foreground hover:text-foreground"
+            title="Download modified database"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline text-xs">Download</span>
+          </Button>
+        </div>
       </header>
 
       {/* Body */}
@@ -396,7 +467,7 @@ function App() {
 
               {/* DataTable */}
               <div className="flex-1 min-h-0 overflow-hidden p-4">
-                <DataTable columns={columns} data={data} />
+                <DataTable columns={columns} data={data} onCellUpdate={handleCellUpdate} />
               </div>
             </>
           ) : (
