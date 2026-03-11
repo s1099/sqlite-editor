@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: "sqlite-editor",
+  base: "/sqlite-editor",
   plugins: [
     react({
       babel: {
@@ -13,17 +13,6 @@ export default defineConfig({
       },
     }),
     tailwindcss(),
-    {
-      name: 'wasm-mime-type',
-      configureServer(server) {
-        server.middlewares.use((req, res, next) => {
-          if (req.url?.endsWith('.wasm')) {
-            res.setHeader('Content-Type', 'application/wasm')
-          }
-          next()
-        })
-      },
-    },
   ],
   resolve: {
     alias: {

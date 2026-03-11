@@ -5,7 +5,7 @@ let SQL: SqlJsStatic | null = null;
 export async function getSql() {
   if (!SQL) {
     SQL = await initSqlJs({
-      locateFile: (file) => `/${file}`,
+      locateFile: (file) => `${import.meta.env.BASE_URL}/${file}`,
     });
   }
   return SQL;
