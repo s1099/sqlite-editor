@@ -1,1 +1,1 @@
-# Sqlite Viewer
+# Sqlite Editor

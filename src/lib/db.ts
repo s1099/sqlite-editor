@@ -1,4 +1,4 @@
-import initSqlJs, { Database, SqlJsStatic } from "sql.js";
+import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 
 let SQL: SqlJsStatic | null = null;
 
