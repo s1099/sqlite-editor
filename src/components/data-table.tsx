@@ -1,4 +1,5 @@
 import * as React from "react"
+import { createPortal } from "react-dom"
 import {
   type ColumnDef,
   type SortingState,
@@ -49,6 +50,119 @@ interface DataTableProps<TData, TValue> {
 interface EditingCell {
   rowId: string
   colKey: string
+  rowData: Record<string, unknown>
+}
+
+function FloatingCellEditor({
+  anchorRect,
+  value,
+  onChange,
+  onSave,
+  onCancel,
+  onSetNull,
+}: {
+  anchorRect: DOMRect
+  value: string
+  onChange: (v: string) => void
+  onSave: () => void
+  onCancel: () => void
+  onSetNull: () => void
+}) {
+  const panelRef = React.useRef<HTMLDivElement>(null)
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+
+  React.useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.focus()
+    ta.setSelectionRange(ta.value.length, ta.value.length)
+  }, [])
+
+  // Auto-grow textarea height to fit content
+  React.useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = "auto"
+    ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`
+  }, [value])
+
+  React.useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onSave()
+      }
+    }
+    document.addEventListener("mousedown", handleMouseDown)
+    return () => document.removeEventListener("mousedown", handleMouseDown)
+  }, [onSave])
+
+  const minWidth = 280
+  const panelWidth = Math.max(anchorRect.width, minWidth)
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const estimatedHeight = 148
+
+  let left = anchorRect.left
+  if (left + panelWidth > viewportWidth - 8) {
+    left = Math.max(8, viewportWidth - panelWidth - 8)
+  }
+
+  let top = anchorRect.bottom + 2
+  if (top + estimatedHeight > viewportHeight - 8) {
+    top = Math.max(8, anchorRect.top - estimatedHeight - 2)
+  }
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      style={{ position: "fixed", top, left, width: panelWidth, zIndex: 9999 }}
+      className="bg-popover border rounded-lg shadow-xl overflow-hidden"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault()
+            onSave()
+          }
+          if (e.key === "Escape") {
+            e.preventDefault()
+            onCancel()
+          }
+        }}
+        rows={1}
+        className="w-full resize-none bg-transparent px-3 pt-2.5 pb-2 text-sm font-mono outline-none min-h-[38px] max-h-[240px] overflow-y-auto"
+      />
+      <div className="flex items-center justify-between gap-2 px-2 py-1.5 border-t bg-muted/40">
+        <button
+          onClick={onSetNull}
+          className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors"
+        >
+          Set NULL
+        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onCancel}
+            className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1.5"
+          >
+            Cancel
+            <kbd className="text-[10px] bg-muted border rounded px-1 font-sans leading-tight">Esc</kbd>
+          </button>
+          <button
+            onClick={onSave}
+            className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded hover:bg-primary/90 transition-colors flex items-center gap-1.5"
+          >
+            Save
+            <kbd className="text-[10px] bg-primary-foreground/20 border border-primary-foreground/30 rounded px-1 font-sans leading-tight">Ctrl+Enter</kbd>
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
 }
 
 export function DataTable<TData, TValue>({
@@ -65,14 +179,27 @@ export function DataTable<TData, TValue>({
   })
   const [editingCell, setEditingCell] = React.useState<EditingCell | null>(null)
   const [editValue, setEditValue] = React.useState("")
-  const editInputRef = React.useRef<HTMLInputElement>(null)
+  const [anchorRect, setAnchorRect] = React.useState<DOMRect | null>(null)
 
-  const commitEdit = (rowData: Record<string, unknown>, colKey: string) => {
-    onCellUpdate?.(rowData, colKey, editValue === "" ? null : editValue)
+
+  const commitEdit = React.useCallback(() => {
+    if (!editingCell) return
+    onCellUpdate?.(editingCell.rowData, editingCell.colKey, editValue === "" ? null : editValue)
     setEditingCell(null)
+    setAnchorRect(null)
+  }, [editingCell, editValue, onCellUpdate])
+
+  const cancelEdit = () => {
+    setEditingCell(null)
+    setAnchorRect(null)
   }
 
-  const cancelEdit = () => setEditingCell(null)
+  const setNullEdit = () => {
+    if (!editingCell) return
+    onCellUpdate?.(editingCell.rowData, editingCell.colKey, null)
+    setEditingCell(null)
+    setAnchorRect(null)
+  }
 
   const table = useReactTable({
     data,
@@ -93,6 +220,8 @@ export function DataTable<TData, TValue>({
     },
   })
 
+  const isEditingAny = editingCell !== null
+
   const { pageIndex, pageSize } = table.getState().pagination
   const totalRows = table.getFilteredRowModel().rows.length
   const from = totalRows === 0 ? 0 : pageIndex * pageSize + 1
@@ -110,6 +239,18 @@ export function DataTable<TData, TValue>({
           className="pl-8 h-8 text-sm"
         />
       </div>
+
+      {/* Floating cell editor */}
+      {isEditingAny && anchorRect && (
+        <FloatingCellEditor
+          anchorRect={anchorRect}
+          value={editValue}
+          onChange={setEditValue}
+          onSave={commitEdit}
+          onCancel={cancelEdit}
+          onSetNull={setNullEdit}
+        />
+      )}
 
       {/* Table */}
       <div className="rounded-md border overflow-auto flex-1 min-h-0">
@@ -178,35 +319,24 @@ export function DataTable<TData, TValue>({
                         key={cell.id}
                         className={cn(
                           "font-mono text-sm max-w-xs",
-                          isEditable && "group/cell relative",
+                          isEditable && "cursor-text",
+                          isEditing && "ring-1 ring-inset ring-primary bg-primary/5",
                         )}
-                        onDoubleClick={() => {
+                        onDoubleClick={(e) => {
                           if (!isEditable) return
-                          setEditingCell({ rowId: row.id, colKey: cell.column.id })
+                          const rect = e.currentTarget.getBoundingClientRect()
+                          setAnchorRect(rect)
+                          setEditingCell({
+                            rowId: row.id,
+                            colKey: cell.column.id,
+                            rowData: row.original as Record<string, unknown>,
+                          })
                           setEditValue(rawValue === null || rawValue === undefined ? "" : String(rawValue))
                         }}
                       >
-                        {isEditing ? (
-                          <input
-                            ref={editInputRef}
-                            autoFocus
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault()
-                                commitEdit(row.original as Record<string, unknown>, cell.column.id)
-                              }
-                              if (e.key === "Escape") cancelEdit()
-                            }}
-                            onBlur={() => commitEdit(row.original as Record<string, unknown>, cell.column.id)}
-                            className="w-full min-w-12 bg-transparent border-0 border-b-2 border-primary outline-none text-sm font-mono py-0 px-0"
-                          />
-                        ) : (
-                          <span className={cn("block truncate", isEditable && "w-full")}>
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </span>
-                        )}
+                        <span className={cn("block truncate", isEditable && "w-full")}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </span>
                       </TableCell>
                     )
                   })}
